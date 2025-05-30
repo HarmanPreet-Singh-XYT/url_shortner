@@ -39,7 +39,7 @@ func (cfg *apiConfig) handlerShorten(w http.ResponseWriter, r *http.Request) {
 		IsActive:    true,
 		Description: data.Description,
 		CreatedAt:   time.Now(),
-		ShortUrl:    fmt.Sprintf("sht-%d", rand.Intn(10000-100+1)+100),
+		ShortUrl:    fmt.Sprintf("sht-%d", rand.Intn(10000000000-10000000+1)+10000000),
 	}
 	analyticsObj := AnalyticsStorage{
 		UrlID:        object.ID,
