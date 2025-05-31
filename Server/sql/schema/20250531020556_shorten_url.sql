@@ -1,14 +1,14 @@
 -- +goose Up
-CREATE TABLE shorten_url (
+CREATE TABLE shortenUrl (
     id UUID NOT NULL PRIMARY KEY,
     originalUrl TEXT NOT NULL,
     shortUrl TEXT NOT NULL,
-    customAlias TEXT,
+    customAlias TEXT NOT NULL,
     createdAt TIMESTAMP,
     clicks INT NOT NULL DEFAULT 0,
-    isActive BOOLEAN DEFAULT TRUE,
-    description TEXT
+    isActive BOOLEAN NOT NULL DEFAULT TRUE,
+    description TEXT NOT NULL
 );
 
 -- +goose Down
-DROP TABLE shorten_url;
+DROP TABLE shortenUrl;

@@ -4,12 +4,16 @@ import (
 	"fmt"
 	"net/http"
 
+	"database/sql"
 	"os"
 
+	"github.com/HarmanPreet-Singh-XYT/internal/database"
 	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
+	dbQueries   *database.Queries
 	frontOrigin string
 	port        string
 }
@@ -24,7 +28,16 @@ func main() {
 	if port == "" {
 		port = "3500"
 	}
+	connStr := os.Getenv("DATABASE")
+	db, errDb := sql.Open("postgres", connStr)
+	if errDb != nil {
+		fmt.Println("DB Connection Failed")
+	}
+
+	dbQ := database.New(db)
+
 	cfg := apiConfig{
+		dbQueries:   dbQ,
 		frontOrigin: origin,
 		port:        port,
 	}

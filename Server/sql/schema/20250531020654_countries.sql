@@ -2,9 +2,9 @@
 CREATE TABLE countries(
     id UUID NOT NULL PRIMARY KEY,
     urlId UUID NOT NULL,
-    country TEXT NOT NULL,
+    country TEXT UNIQUE NOT NULL,
     clicks int NOT NULL DEFAULT 1,
-    FOREIGN KEY (urlId) REFERENCES shorten_url(id) ON DELETE CASCADE
+    FOREIGN KEY (urlId) REFERENCES shortenUrl(id) ON DELETE CASCADE
 );
 -- +goose Down
 DROP TABLE countries;

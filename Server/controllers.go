@@ -1,20 +1,17 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
 	"strings"
-	"time"
 
-	"slices"
-
+	"github.com/HarmanPreet-Singh-XYT/internal/database"
 	"github.com/google/uuid"
 )
-
-var shorten = []ShortenResponse{}
-var analytics = []AnalyticsStorage{}
 
 func (cfg *apiConfig) handlerHelloWorld(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(205)
@@ -31,36 +28,63 @@ func (cfg *apiConfig) handlerShorten(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	object := ShortenResponse{
-		ID:          uuid.New(),
-		OriginalURL: data.OriginalURL,
-		CustomAlias: data.CustomAlias,
-		Clicks:      0,
-		IsActive:    true,
+
+	shortenCreation, err := cfg.dbQueries.CreateShortenURL(r.Context(), database.CreateShortenURLParams{
+		Originalurl: data.OriginalURL,
+		Shorturl:    fmt.Sprintf("sht-%d", rand.Intn(10000000000-10000000+1)+10000000),
+		Customalias: data.CustomAlias,
 		Description: data.Description,
-		CreatedAt:   time.Now(),
-		ShortUrl:    fmt.Sprintf("sht-%d", rand.Intn(10000000000-10000000+1)+10000000),
+		Isactive:    true,
+		Clicks:      0,
+	})
+	if err != nil {
+		http.Error(w, "url analytics not found", http.StatusBadGateway)
 	}
-	analyticsObj := AnalyticsStorage{
-		UrlID:        object.ID,
-		TotalClicks:  0,
-		UniqueClicks: 0,
-		ClicksByDate: []ClicksByDate{},
-		Referrers:    []Referrers{},
-		Countries:    []Countries{},
+
+	err1 := cfg.dbQueries.CreateAnalytics(r.Context(), shortenCreation.ID)
+	if err1 != nil {
+		http.Error(w, "url analytics not found", http.StatusBadGateway)
 	}
-	shorten = append(shorten, object)
-	analytics = append(analytics, analyticsObj)
-	object.ShortUrl = fmt.Sprintf("%s/%s", cfg.frontOrigin, object.ShortUrl)
+
+	shortURL := fmt.Sprintf("%s/%s", cfg.frontOrigin, shortenCreation.Shorturl)
 	w.WriteHeader(200)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(object)
+	json.NewEncoder(w).Encode(ShortenResponse{
+		ID:          shortenCreation.ID,
+		OriginalURL: shortenCreation.Originalurl,
+		CustomAlias: shortenCreation.Customalias,
+		Clicks:      int(shortenCreation.Clicks),
+		IsActive:    shortenCreation.Isactive,
+		Description: shortenCreation.Description,
+		CreatedAt:   shortenCreation.Createdat.Time,
+		ShortUrl:    shortURL,
+	})
 
 }
 func (cfg *apiConfig) handlerURL(w http.ResponseWriter, r *http.Request) {
+	var data = []ShortenResponse{}
+	objects, err := cfg.dbQueries.GetAllShortens(r.Context())
+	if err != nil {
+		http.Error(w, "url analytics not found", http.StatusBadGateway)
+	}
+	if len(objects) != 0 {
+		for _, val := range objects {
+			data = append(data, ShortenResponse{
+				OriginalURL: val.Originalurl,
+				ShortUrl:    val.Shorturl,
+				CustomAlias: val.Customalias,
+				ID:          val.ID,
+				Description: val.Description,
+				CreatedAt:   val.Createdat.Time,
+				Clicks:      int(val.Clicks),
+				IsActive:    val.Isactive,
+			})
+		}
+	}
+
 	w.WriteHeader(200)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(shorten)
+	json.NewEncoder(w).Encode(data)
 }
 func (cfg *apiConfig) handlerURLAnalytics(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -77,21 +101,74 @@ func (cfg *apiConfig) handlerURLAnalytics(w http.ResponseWriter, r *http.Request
 		http.Error(w, "url parse failed", http.StatusBadRequest)
 		return
 	}
-	for _, val := range analytics {
-		if val.UrlID == urlID {
-			w.WriteHeader(200)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(AnalyticsResponse{
-				TotalClicks:  val.TotalClicks,
-				UniqueClicks: val.UniqueClicks,
-				ClicksByDate: val.ClicksByDate,
-				Referrers:    val.Referrers,
-				Countries:    val.Countries,
-			})
+	analytic, err := cfg.dbQueries.GetAnalyticsByUrlId(r.Context(), urlID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "url analytics not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "db query failed", http.StatusBadGateway)
+		return
+	}
+
+	clicksByDateOutput := []ClicksByDate{}
+	referrersOutput := []Referrers{}
+	countriesOutput := []Countries{}
+
+	clicksByDate, err := cfg.dbQueries.GetClicksByDatesByUrlId(r.Context(), urlID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "url parse failed", http.StatusBadRequest)
 			return
 		}
 	}
-	http.Error(w, "url analytics not found", http.StatusNotFound)
+	if len(clicksByDate) > 0 {
+		for _, val := range clicksByDate {
+			clicksByDateOutput = append(clicksByDateOutput, ClicksByDate{
+				Date:   val.Date,
+				Clicks: int(val.Clicks),
+			})
+		}
+	}
+	referrers, err := cfg.dbQueries.GetReferrersByUrlId(r.Context(), urlID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "url parse failed", http.StatusBadRequest)
+			return
+		}
+	}
+	if len(referrers) > 0 {
+		for _, val := range referrers {
+			referrersOutput = append(referrersOutput, Referrers{
+				Source: val.Source,
+				Clicks: int(val.Clicks),
+			})
+		}
+	}
+	countries, err := cfg.dbQueries.GetCountriesByUrlId(r.Context(), urlID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "url parse failed", http.StatusBadRequest)
+			return
+		}
+	}
+	if len(countries) > 0 {
+		for _, val := range countries {
+			countriesOutput = append(countriesOutput, Countries{
+				Country: val.Country,
+				Clicks:  int(val.Clicks),
+			})
+		}
+	}
+	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(AnalyticsResponse{
+		TotalClicks:  int(analytic.Totalclicks),
+		UniqueClicks: int(analytic.Uniqueclicks),
+		ClicksByDate: clicksByDateOutput,
+		Referrers:    referrersOutput,
+		Countries:    countriesOutput,
+	})
 }
 func (cfg *apiConfig) handlerURLDelete(w http.ResponseWriter, r *http.Request) {
 	// Expected path: /urls/{id}
@@ -116,18 +193,20 @@ func (cfg *apiConfig) handlerURLDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "url parse failed", http.StatusBadRequest)
 		return
 	}
-	for i, val := range shorten {
-		if val.ID == id {
-			shorten = slices.Delete(shorten, i, i+1)
-			w.WriteHeader(200)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(SuccessResponse{
-				Success: true,
-			})
+	errDB := cfg.dbQueries.DeleteShortenURLById(r.Context(), id)
+	if errDB != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "url analytics not found", http.StatusNotFound)
 			return
 		}
+		http.Error(w, "Database Failed", http.StatusBadGateway)
+		return
 	}
-	http.Error(w, "url analytics not found", http.StatusNotFound)
+	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(SuccessResponse{
+		Success: true,
+	})
 }
 func (cfg *apiConfig) handlerURLToggle(w http.ResponseWriter, r *http.Request) {
 	// Path example: /urls/123/toggle
@@ -160,18 +239,23 @@ func (cfg *apiConfig) handlerURLToggle(w http.ResponseWriter, r *http.Request) {
 	var data ToggleURL
 	json.NewDecoder(r.Body).Decode(&data)
 
-	for i, val := range shorten {
-		if val.ID == id {
-			shorten[i].IsActive = data.IsActive
-			w.WriteHeader(200)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(SuccessResponse{
-				Success: true,
-			})
+	errDB := cfg.dbQueries.UpdateShortenURLStatusById(r.Context(), database.UpdateShortenURLStatusByIdParams{
+		ID:       id,
+		Isactive: data.IsActive,
+	})
+	if errDB != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "url analytics not found", http.StatusNotFound)
 			return
 		}
+		http.Error(w, "Database Failed", http.StatusBadGateway)
+		return
 	}
-	http.Error(w, "url analytics not found", http.StatusNotFound)
+	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(SuccessResponse{
+		Success: true,
+	})
 }
 func (cfg *apiConfig) handlerURLUpdate(w http.ResponseWriter, r *http.Request) {
 	// Expected path: /urls/{id}
@@ -200,20 +284,25 @@ func (cfg *apiConfig) handlerURLUpdate(w http.ResponseWriter, r *http.Request) {
 	var data Shorten
 	json.NewDecoder(r.Body).Decode(&data)
 
-	for i, val := range shorten {
-		if val.ID == id {
-			shorten[i].OriginalURL = data.OriginalURL
-			shorten[i].CustomAlias = data.CustomAlias
-			shorten[i].Description = data.Description
-			w.WriteHeader(200)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(SuccessResponse{
-				Success: true,
-			})
+	errDB := cfg.dbQueries.UpdateShortenURLById(r.Context(), database.UpdateShortenURLByIdParams{
+		Originalurl: data.OriginalURL,
+		Customalias: data.CustomAlias,
+		Description: data.Description,
+		ID:          id,
+	})
+	if errDB != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "url analytics not found", http.StatusNotFound)
 			return
 		}
+		http.Error(w, "Database Failed", http.StatusBadGateway)
+		return
 	}
-	http.Error(w, "url analytics not found", http.StatusNotFound)
+	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(SuccessResponse{
+		Success: true,
+	})
 }
 
 func IPLocation(ip string) (string, error) {
@@ -238,68 +327,126 @@ func IPLocation(ip string) (string, error) {
 	return resParameters.Country, nil
 }
 
-func (body Redirect) handleAnalyticsUpdate(id uuid.UUID) error {
-	for i, val := range analytics {
-		if val.UrlID == id {
-			analytics[i].TotalClicks++
-			if body.IsUnique {
-				analytics[i].UniqueClicks++
+func (cfg *apiConfig) handleAnalyticsUpdate(id uuid.UUID, body Redirect, w http.ResponseWriter, r *http.Request) error {
+	err := cfg.dbQueries.IncrementClick(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	if body.UTM.Source == "" {
+		body.UTM.Source = "Direct"
+	}
+	if body.IsUnique {
+		errD := cfg.dbQueries.IncrementTotalClicks_UniqueClicksByUrlId(r.Context(), id)
+		if errD != nil {
+			if errors.Is(errD, sql.ErrNoRows) {
+				http.Error(w, "url analytics not found", http.StatusNotFound)
+				return errD
 			}
-			if body.UTM.Source == "" {
-				body.UTM.Source = "Direct"
+			http.Error(w, "Database Failed", http.StatusBadGateway)
+			return errD
+		}
+	} else {
+		errD := cfg.dbQueries.IncrementClicksByUrlId(r.Context(), id)
+		if errD != nil {
+			if errors.Is(errD, sql.ErrNoRows) {
+				http.Error(w, "url analytics not found", http.StatusNotFound)
+				return errD
 			}
-			// Referrers
-			if len(val.Referrers) == 0 {
-				analytics[i].Referrers = append(analytics[i].Referrers, Referrers{Source: body.UTM.Source, Clicks: 1})
-			} else {
-				found := false
-				for r, ref := range val.Referrers {
-					if ref.Source == body.UTM.Source {
-						found = true
-						analytics[i].Referrers[r].Clicks++
-					}
-				}
-				if !found {
-					analytics[i].Referrers = append(analytics[i].Referrers, Referrers{Source: body.UTM.Source, Clicks: 1})
-				}
+			http.Error(w, "Database Failed", http.StatusBadGateway)
+			return errD
+		}
+	}
+	// Referrers
+	referrers, err := cfg.dbQueries.GetReferrerBySourceUrlId(r.Context(), database.GetReferrerBySourceUrlIdParams{
+		Source: body.UTM.Source,
+		Urlid:  id,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			errD := cfg.dbQueries.CreateReferrer(r.Context(), database.CreateReferrerParams{
+				Urlid:  id,
+				Source: body.UTM.Source,
+			})
+			if errD != nil {
+				http.Error(w, "Database Failed", http.StatusBadGateway)
+				return errD
 			}
-			// Clicks by date
-			date := body.TimeStamp[:10]
+		} else {
+			http.Error(w, "Database Failed", http.StatusBadGateway)
+			return err
+		}
+	} else {
+		errD := cfg.dbQueries.IncrementReferrerClicks(r.Context(), database.IncrementReferrerClicksParams{
+			Source: referrers.Source,
+			Urlid:  referrers.Urlid,
+		})
+		if errD != nil {
+			http.Error(w, "Database Failed", http.StatusBadGateway)
+			return errD
+		}
+	}
+	// Clicks by date
+	date := body.TimeStamp[:10]
+	clicksByDate, err := cfg.dbQueries.GetClicksByDatesByUrlIdDate(r.Context(), database.GetClicksByDatesByUrlIdDateParams{
+		Urlid: id,
+		Date:  date,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			errD := cfg.dbQueries.CreateClicksByDate(r.Context(), database.CreateClicksByDateParams{
+				Urlid: id,
+				Date:  date,
+			})
+			if errD != nil {
+				http.Error(w, "Database Failed", http.StatusBadGateway)
+				return errD
+			}
+		} else {
+			http.Error(w, "Database Failed", http.StatusBadGateway)
+			return err
+		}
+	} else {
+		errD := cfg.dbQueries.IncrementClicksByDateByUrlIdDate(r.Context(), database.IncrementClicksByDateByUrlIdDateParams{
+			Urlid: clicksByDate.Urlid,
+			Date:  clicksByDate.Date,
+		})
+		if errD != nil {
+			http.Error(w, "Database Failed", http.StatusBadGateway)
+			return errD
+		}
+	}
 
-			if len(val.ClicksByDate) == 0 {
-				analytics[i].ClicksByDate = append(analytics[i].ClicksByDate, ClicksByDate{Date: date, Clicks: 1})
-			} else {
-				found := false
-				for d, ref := range val.ClicksByDate {
-					if ref.Date == date {
-						found = true
-						analytics[i].ClicksByDate[d].Clicks++
-					}
-				}
-				if !found {
-					analytics[i].ClicksByDate = append(analytics[i].ClicksByDate, ClicksByDate{Date: date, Clicks: 1})
-				}
+	// Country
+	location, err := IPLocation(body.IPAddress)
+	if err != nil {
+		return err
+	}
+	country, err := cfg.dbQueries.GetCountryClicksByUrlIdDate(r.Context(), database.GetCountryClicksByUrlIdDateParams{
+		Country: location,
+		Urlid:   id,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			errD := cfg.dbQueries.CreateCountryClicks(r.Context(), database.CreateCountryClicksParams{
+				Urlid:   id,
+				Country: location,
+			})
+			if errD != nil {
+				http.Error(w, "Database Failed", http.StatusBadGateway)
+				return errD
 			}
-			// Country
-			location, err := IPLocation(body.IPAddress)
-			if err != nil {
-				return err
-			}
-			if len(val.Countries) == 0 {
-				analytics[i].Countries = append(analytics[i].Countries, Countries{Country: location, Clicks: 1})
-			} else {
-				found := false
-				for c, ref := range val.Countries {
-					if ref.Country == location {
-						found = true
-						analytics[i].Countries[c].Clicks++
-					}
-				}
-				if !found {
-					analytics[i].Countries = append(analytics[i].Countries, Countries{Country: location, Clicks: 1})
-				}
-			}
-
+		} else {
+			http.Error(w, "Database Failed", http.StatusBadGateway)
+			return err
+		}
+	} else {
+		errD := cfg.dbQueries.IncrementCountryClicks(r.Context(), database.IncrementCountryClicksParams{
+			Urlid:   country.Urlid,
+			Country: country.Country,
+		})
+		if errD != nil {
+			http.Error(w, "Database Failed", http.StatusBadGateway)
+			return errD
 		}
 	}
 	return nil
@@ -328,31 +475,36 @@ func (cfg *apiConfig) handlerURLRedirect(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "body decode failed", http.StatusFailedDependency)
 		return
 	}
-	for i, val := range shorten {
-		if val.ShortUrl == shortID {
-			shorten[i].Clicks++
-			if !val.IsActive {
-				w.WriteHeader(410)
-				http.Error(w, "url is Inactive", http.StatusGone)
-			}
 
-			err := data.handleAnalyticsUpdate(val.ID)
-			if err != nil {
-				http.Error(w, "Analytics failed", http.StatusFailedDependency)
-				return
-			}
-
-			w.WriteHeader(200)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(RedirectResponse{
-				OriginalURL:     val.OriginalURL,
-				Title:           val.CustomAlias,
-				Description:     val.Description,
-				IsActive:        val.IsActive,
-				RequiresWarning: false,
-			})
+	shortenData, errDB := cfg.dbQueries.GetShortenURLByShortUrl(r.Context(), shortID)
+	if errDB != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "url analytics not found", http.StatusNotFound)
 			return
 		}
+		http.Error(w, "Database Failed", http.StatusBadGateway)
+		return
 	}
-	http.Error(w, "url analytics not found", http.StatusNotFound)
+
+	if !shortenData.Isactive {
+		w.WriteHeader(410)
+		http.Error(w, "url is Inactive", http.StatusGone)
+		return
+	}
+
+	err1 := cfg.handleAnalyticsUpdate(shortenData.ID, data, w, r)
+	if err1 != nil {
+		http.Error(w, "Analytics failed", http.StatusFailedDependency)
+		return
+	}
+
+	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(RedirectResponse{
+		OriginalURL:     shortenData.Originalurl,
+		Title:           shortenData.Customalias,
+		Description:     shortenData.Description,
+		IsActive:        shortenData.Isactive,
+		RequiresWarning: false,
+	})
 }
