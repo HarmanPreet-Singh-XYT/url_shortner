@@ -1,4 +1,4 @@
-import URLShortenerApp from '@/components/Shortner'
+import URLShortenerApp from '@/components/Shortener'
 import React from 'react'
 
 const page = () => {

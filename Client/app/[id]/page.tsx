@@ -13,8 +13,8 @@ import {
 } from 'lucide-react';
 
 // Configuration
-const USE_BACKEND = process.env.USE_BACKEND === "TRUE" ? true : false;
-const API_BASE = process.env.BACKEND_URL;
+const USE_BACKEND = true;
+const API_BASE = "http://localhost:3500";
 
 // Analytics and redirection service
 const redirectService = {
